@@ -1,6 +1,17 @@
 #include <RGBmatrixPanel.h>
 #include <stdint.h>
 
+#define DEBUG 1
+
+#define INITIAL_DP 12
+
+#define BIT4 13
+#define BIT3 12
+#define BIT2 11
+#define BIT1 10
+#define USR_CLK  A5
+#define SINGLE_EN  A4
+
 #define CLK  8  
 #define OE   9
 #define LAT A3
@@ -10,13 +21,12 @@
 
 RGBmatrixPanel matrix(A, B, C, CLK, LAT, OE, false);
 
-#define DEBUG 1
-
-uint8_t dataPoints[30] = {0};
-#define INITIAL_DP -1
+uint8_t blueDataPoints[30] = {0};
+uint8_t redDataPoints[30] = {0};
 
 void setup() {
-  // Serial.begin(115200);
+  pinMode(0, OUTPUT);
+  pinMode(1, OUTPUT);
   matrix.begin();
 
   // fix the screen with black
@@ -44,84 +54,119 @@ void setup() {
     }
   }
 
-  #ifdef DEBUG
   // draw grey divider
   matrix.drawLine(1, 13, 30, 13, matrix.Color333(1, 1, 1)); 
 
+  // initialize the data points as 12
+  for (int i = 0; i < 30; i++) {
+    blueDataPoints[i] = INITIAL_DP;
+    redDataPoints[i] = INITIAL_DP;
+  }
+
+  pinMode(BIT4, INPUT_PULLUP);
+  pinMode(BIT3, INPUT_PULLUP);
+  pinMode(BIT2, INPUT_PULLUP);
+  pinMode(BIT1, INPUT_PULLUP);
+  pinMode(USR_CLK, INPUT);
+  pinMode(SINGLE_EN, INPUT);
+
+  #ifdef DEBUG
+  Serial.begin(115200);
+  #endif
+}
+
+bool prevClk = false;
+bool blueCycle = true;
+bool prevSingleEn = false;
+void loop() {
+  bool bit4 = digitalRead(BIT4);
+  bool bit3 = digitalRead(BIT3);
+  bool bit2 = digitalRead(BIT2);
+  bool bit1 = digitalRead(BIT1);
+
+  matrix.drawPixel(1, 14, bit4 ? matrix.Color333(0, 0, 4) : matrix.Color333(0, 0, 0));
+  matrix.drawPixel(2, 14, bit3 ? matrix.Color333(0, 0, 4) : matrix.Color333(0, 0, 0));
+  matrix.drawPixel(3, 14, bit2 ? matrix.Color333(0, 0, 4) : matrix.Color333(0, 0, 0));
+  matrix.drawPixel(4, 14, bit1 ? matrix.Color333(0, 0, 4) : matrix.Color333(0, 0, 0));
+
+  int newValue = 8 * !bit4 + 4 * !bit3 + 2 * !bit2 + 1 * !bit1;
+
+  bool clk = digitalRead(USR_CLK);
+
+  matrix.drawPixel(30, 14, clk ? matrix.Color333(0, 4, 4) : matrix.Color333(0, 0, 0));
+
+  bool single_en = digitalRead(SINGLE_EN);
+
+  matrix.drawPixel(29, 14, single_en ? matrix.Color333(4, 4, 0) : matrix.Color333(4, 0, 0));
+
+  if (clk == HIGH && prevClk == LOW) {
+    prevClk = clk;
+  } else {
+    prevClk = clk;
+    return;
+  }
+
+  if (single_en == LOW) {
+    // dual channel mode : switch blue and red data points
+    blueCycle = !blueCycle;
+  } else {
+    // single channel mode : blue data points only
+    blueCycle = true;
+  }
+
+  if (single_en != prevSingleEn) {
+    // switched modes: Reset Data Points
+    for (int i = 0; i < 30; i++) {
+      blueDataPoints[i] = INITIAL_DP;
+      redDataPoints[i] = INITIAL_DP;
+    }
+  }
+
+  prevSingleEn = single_en;
+
+  #ifdef DEBUG
+  Serial.print("newValue: ");
+  Serial.print(newValue);
+  Serial.print(" isBlueOn: ");
+  Serial.println(blueCycle);
   #endif
 
-  // initialize the data points as -1
-  for (int i = 0; i < 30; i++) {
-    dataPoints[i] = INITIAL_DP;
-  }
-  randomSeed(analogRead(A4));
-
-}
-
-uint8_t getTriangleWave() {
-  // Static variable to keep track of the current value between function calls
-  static uint8_t currentValue = 0;
-  // Static variable to track direction (0 = ascending, 1 = descending)
-  static bool descending = false;
-  
-  // Store the current value to return
-  uint8_t valueToReturn = currentValue;
-  
-  // Update the value for the next call
-  if (!descending) {
-    // Moving up
-    currentValue++;
-    // If we've reached the top value, start descending
-    if (currentValue >= 11) {
-      descending = true;
-    }
-  } else {
-    // Moving down
-    currentValue--;
-    // If we've reached the bottom value, start ascending
-    if (currentValue <= 0) {
-      descending = false;
-    }
-  }
-  
-  return valueToReturn;
-}
-
-uint8_t getSineWave() {
-  // Static variable to keep track of the angle (in degrees)
-  static uint16_t angle = 0;
-  
-  // Calculate sine value (-1.0 to 1.0) and map to range 0-11
-  // sin() works with radians, so convert degrees to radians
-  float sinValue = sin(angle * PI / 180.0);
-  uint8_t mappedValue = (uint8_t)round(sinValue * 11.0/2 + 11.0/2);
-  
-  // Increment angle for next call (0 to 359 degrees)
-  angle = (angle + 15) % 360;
-  
-  return mappedValue;
-}
-
-// TODO: Shift the data points within the display loop
-void loop() {
   // right shift the data points
   for (int i = 29; i > 0; i--) {
-    dataPoints[i] = dataPoints[i - 1];
+    if (blueCycle) {
+      blueDataPoints[i] = blueDataPoints[i - 1];
+    } else {
+      redDataPoints[i] = redDataPoints[i - 1];
+    }
   }
-  dataPoints[0] = getTriangleWave();
-  // dataPoints[0] = getSineWave();
 
+  if (blueCycle) {
+    blueDataPoints[0] = newValue;
+  } else {
+    redDataPoints[0] = newValue;
+  }
+  
+  
   // reset oscilloscope display
   matrix.fillRect(1, 1, 30, 12, matrix.Color333(0, 0, 0));
-
-  // draw the data points
+  
+  // draw all blue data points
   for (int i = 0; i < 30; i++) {
     int x = i + 1;
-    int y = 12 - dataPoints[i];
-    if (dataPoints[i] != INITIAL_DP) {
+    int y = 12 - blueDataPoints[i];
+    if (blueDataPoints[i] != INITIAL_DP) {
       matrix.drawPixel(x, y, matrix.Color333(0, 0, 4));
     }
   }
-
-  delay(5);
+  
+  if (single_en == LOW) {
+    // draw all red data points only if on dual channel mode
+    for (int i = 0; i < 30; i++) {
+      int x = i + 1;
+      int y = 12 - redDataPoints[i];
+      if (redDataPoints[i] != INITIAL_DP) {
+        matrix.drawPixel(x, y, matrix.Color333(4, 0, 0));
+      }
+    }
+  }
 }
